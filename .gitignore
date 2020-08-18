@@ -1,0 +1,10 @@
+# clion
+cmake-build-debug/
+CMakeFiles/
+.idea/
+*.cmake
+CMakeCache.txt
+Makefile
+
+# mac
+.DS_Store
