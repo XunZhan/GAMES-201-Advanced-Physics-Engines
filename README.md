@@ -12,7 +12,7 @@ Course BBS: [https://forum.taichi.graphics](https://forum.taichi.graphics)
 The course aims to provide foundation of simulation with implementation of [Taichi Programing Language](https://github.com/taichi-dev/taichi). Content includes: SPH, FEM, MPM, Lagrangian and Eulerian approach.
 
 ## SPH
-![Fluid using WCSPH](SPH/result-wcsph.gif | width = 50)  
+<img src="SPH/result-wcsph.gif" width="350">
 Reference: Becker, Markus, and Matthias Teschner. "Weakly compressible SPH for free surface flows."  
 
 ## FEM
