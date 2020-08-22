@@ -19,4 +19,4 @@ Becker, Markus, and Matthias Teschner. "Weakly compressible SPH for free surface
 ## FEM
 <img src="FEM/result-fem.gif" width="350">  
 Reference:  
-[https://www.comsol.com/multiphysics/finite-element-method](https://www.comsol.com/multiphysics/finite-element-method)  
+[The Finite Element Method (FEM)](https://www.comsol.com/multiphysics/finite-element-method)  
