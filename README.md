@@ -17,4 +17,4 @@ Reference: Becker, Markus, and Matthias Teschner. "Weakly compressible SPH for f
 
 ## FEM
 <img src="FEM/result-fem.gif" width="350">  
-Reference: [https://www.comsol.com/multiphysics/finite-element-method](https://www.comsol.com/multiphysics/finite-element-method)
+Reference: [https://www.comsol.com/multiphysics/finite-element-method] (https://www.comsol.com/multiphysics/finite-element-method)
