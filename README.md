@@ -16,5 +16,5 @@ The course aims to provide foundation of simulation with implementation of [Taic
 Reference: Becker, Markus, and Matthias Teschner. "Weakly compressible SPH for free surface flows."  
 
 ## FEM
-![Elastic Structure using Explicit FEM](FEM/result-fem.gif)  
+<img src="FEM/result-fem.gif" width="350">
 Reference: [https://www.comsol.com/multiphysics/finite-element-method](https://www.comsol.com/multiphysics/finite-element-method)
