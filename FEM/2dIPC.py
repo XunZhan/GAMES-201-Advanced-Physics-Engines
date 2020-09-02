@@ -63,6 +63,7 @@ class System:
         self.en = 1000
         self.node = ti.Vector(self.dim, dt=ti.f32, shape=self.vn, needs_grad=True)
         self.prev_node = ti.Vector(self.dim, dt=ti.f32, shape=self.vn)
+        self.prev_t_node = ti.Vector(self.dim, dt=ti.f32, shape=self.vn)
         self.bar_node = ti.Vector(self.dim, dt=ti.f32, shape=self.vn)
         self.p = ti.Vector(self.dim, dt=ti.f32, shape=self.vn)
         self.element = ti.Vector(self.dim + 1, dt=ti.i32, shape=self.en)
@@ -116,6 +117,7 @@ class System:
         for i in range(vn):
             self.node[self.vn_object_index[self.count] + i] = [node[i, 0], node[i, 1]]
             self.prev_node[self.vn_object_index[self.count] + i] = [node[i, 0], node[i, 1]]
+            self.prev_t_node[self.vn_object_index[self.count] + i] = [node[i, 0], node[i, 1]]
             # self.velocity[self.vn_object_index[self.count] + i] = [0, -5]
         for i in range(en):
             # Mapping single object element id to system-wide
@@ -148,6 +150,7 @@ class System:
         # print("Add obj after v:", self.vn_object_index[self.count])
         # print("Add obj after e:", self.en_object_index[self.count])
         # print("Add obj after mass:", self.node_mass[0])
+        print("Add obj after node:", self.node[0])
 
     @ti.func
     def D(self, idx):
@@ -174,14 +177,6 @@ class System:
 
     @ti.func
     def U1(self, i):  # gravitational potential energy E = mgh
-        a = self.element[i][0]
-        b = self.element[i][1]
-        c = self.element[i][2]
-        return self.element_mass[i] * 10 * 4 * (self.node[a].y + self.node[b].y + self.node[c].y) / 4
-
-    @ti.func
-    def U2(self, i):  # contact potential energy
-        # TODO: implment contact potential here
         a = self.element[i][0]
         b = self.element[i][1]
         c = self.element[i][2]
@@ -230,19 +225,20 @@ class System:
 
     @ti.func
     def implicit_U4(self, i):
-        return (self.bar_node[i] - self.node[i]).norm() * 0.5
+        return 0.5*((self.bar_node[i] - self.node[i]).norm_sqr())
 
     @ti.func
-    def implicit_U5(self, i,t):
+    def implicit_U5(self, i):
         # bounding contact potential
+        t=0.0
         if self.node[i].x>=1:
             t+=0
         else:
-            t+=1 * ((self.node[i].x-1)**2)*ti.log(ti.abs(self.node[i]).x/1)
+            t+=-1 * ((self.node[i].x-1)**2)*ti.log(ti.abs(self.node[i]).x/1)
         if self.node[i].y>=1:
             t+=0
         else:
-            t+=1 * ((self.node[i].y-1)**2)*ti.log(ti.abs(self.node[i]).y/1)
+            t+=-1 * ((self.node[i].y-1)**2)*ti.log(ti.abs(self.node[i]).y/1)
         t=1*t
         # print("U5 i",t)
         return  t
@@ -250,28 +246,43 @@ class System:
     @ti.kernel
     def implicit_energy_integrate(self):
         # TODO: Fix U0 here
+        # print("U0",self.U0(0))
+        # print("U1",self.U1(0))
+        # # print("U2",self.U2(0))
+        # # print("U3",self.U3(0))
+        # print("U4",self.implicit_U4(0))
+        # print("U5",self.implicit_U5(0))
+        # self.energy[None]=0
         for i in range(self.en_object_index[self.count]):
-            self.energy[None] += (self.U0(i)+self.U1(i)) * self.dt * self.dt
+            self.energy[None] += self.U0(i) * self.dt * self.dt
+            self.energy[None] += self.U1(i) * self.dt * self.dt
         for i in range(self.vn_object_index[self.count]):
-            self.energy[None] += self.implicit_U4(i) + self.implicit_U5(i,0)
+            # self.energy[None] += self.implicit_U4(i) + self.implicit_U5(i)
+            self.energy[None] += self.implicit_U4(i)
+            self.energy[None] += self.implicit_U5(i)
 
     @ti.kernel
-    def implicit_prepare_node(self):
-        # print("f", 10 * self.dt * self.dt / self.node_mass[0])
+    def implicit_cal_x_bar(self):
         for i in range(self.vn_object_index[self.count]):
-            self.bar_node[i] = 2 * self.node[i] - self.prev_node[i] + [0, -10 * self.dt * self.dt / self.node_mass[i]]
-            self.prev_node[i] = self.node[i]
+            self.bar_node[i] = 2 * self.node[i] - self.prev_t_node[i] + [0, -10 * self.dt * self.dt / self.node_mass[i]]
+
     @ti.kernel
-    def implicit_copy_to_prev(self):
+    def implicit_x_bar_to_x(self):
+        for i in range(self.vn_object_index[self.count]):
+            self.node[i] = self.bar_node[i]
+
+    @ti.kernel
+    def implicit_x_to_x_prev(self):
         for i in range(self.vn_object_index[self.count]):
             self.prev_node[i] = self.node[i]
 
     @ti.kernel
-    def implicit_get_grad(self):
+    def implicit_cal_p(self):
         for i in range(self.vn_object_index[self.count]):
             self.p[i] = self.node.grad[i]
+        print(self.p[0])
     @ti.kernel
-    def implicit_get_max_grad(self,m:ti.f32)->ti.f32:
+    def implicit_cal_p_max_norm(self)->float:
         m=0.0
         for i in range(self.vn_object_index[self.count]):
             m =max(self.p[i][0],m) 
@@ -279,44 +290,53 @@ class System:
         return m
     
     @ti.kernel
-    def implicit_update_node(self):
-        # print("E:", self.energy[None])
+    def implicit_x_to_prev_t_x(self):
         for i in range(self.vn_object_index[self.count]):
-            self.node[i] = self.prev_node[i]
-
-        # print("p:", self.p[0])
-        # print("bar:", self.bar_node[0], )
-        # print("node:", self.node[0], )
+            self.prev_t_node[i] = self.node[i]
     @ti.kernel
     def implicit_try_update_node(self,alpha:ti.f32):
-        # print("E:", self.energy[None])
+
         for i in range(self.vn_object_index[self.count]):
             self.node[i] = self.prev_node[i] -self.p[i] * alpha
-
+        # print("E:", self.energy[None])
         # print("p:", self.p[0])
         # print("bar:", self.bar_node[0], )
+        # print("prev_t_node:", self.prev_t_node[0], )
+        # print("prev_node:", self.prev_node[0], )
         # print("node:", self.node[0], )
 
 
     @ti.kernel
-    def implicit_clip(self):
+    def implicit_clip(self)->bool:
+        flag=False
         for i in range(self.vn_object_index[self.count]):
             for c in ti.static(range(self.dim)):
                 if self.node[i][c] < boundary[c][0]:
                     self.node[i][c] = boundary[c][0] + self.epsilon * ti.random()
                     # self.velocity[i][c] *= -1
+                    flag=True
 
                 elif self.node[i][c] > boundary[c][1]:
                     self.node[i][c] = boundary[c][1] - self.epsilon * ti.random()
                     # self.velocity[i][c] *= -1
+                    flag = True
+        return flag
     @ti.kernel
     def save_previous_energy(self):
         self.prev_energy[None]=self.energy[None]
+        self.energy[None] = 0
+
     @ti.kernel
     def get_delta(self)->ti.f32:
         return self.energy[None]-self.prev_energy[None]
-        
 
+    @ti.kernel
+    def print_node(self):
+        print(self.node[0])
+
+def CCD()->float:
+
+    pass
 def render(gui, system):
     canvas = gui.canvas
     canvas.clear(bg_color)
@@ -367,55 +387,59 @@ def inplicit():
                 tmp_obj = NewObject("obj")
                 s.add_obj(tmp_obj.vn, tmp_obj.en, tmp_obj.node, tmp_obj.element)
                 tprint(s)
-                
-        # max_iter_num=500
-        # self.implicit_prepare_node()
-        # old_energy=0.0
-        # iter_i = 0
-        # while iter_i < max_iter_num:
-        #     self.implicit_clip()
-        #     alpha=0.1
-        #     while alpha>0.00001:
-        #         with ti.Tape(self.energy):
-        #             self.implicit_energy_integrate()
-        #         self.implicit_get_grad()
-        #         self.implicit_update_node(alpha)
-        #         if self.energy[None] - old_energy<0:
-        #             break
-        max_iter_num=100
+
+        max_iter_num=10
         tol=1e-3
-        s.implicit_prepare_node()
-
-        with ti.Tape(s.energy):
-            s.implicit_energy_integrate()
+        p_max_norm=1e3
+        i=0
+        # cal x_bar
+        # print("1")
+        # s.print_node()
+        s.implicit_cal_x_bar()
+        # print("2")
+        # s.print_node()
+        s.implicit_x_bar_to_x()
+        # print("3")
+        # s.print_node()
+        s.implicit_energy_integrate()
+        # print("4")
+        # s.print_node()
         s.save_previous_energy()
-        # s.implicit_get_grad()
-        
-        for iter in range(max_iter_num):
-            # alpha=CCD()
-            alpha=0.5
-            delta=1
+        # print("5")
+        # s.print_node()
+        s.implicit_x_to_x_prev()
+        # print("6")
+        # s.print_node()
 
-            while delta >= 0:
-                alpha*=0.5
-                s.implicit_clip()
-                with ti.Tape(s.energy):
-                    s.implicit_energy_integrate()
-                delta=s.get_delta()
-                s.implicit_get_grad()
-                s.implicit_try_update_node(alpha)
-            # print(alpha)
-            # s.implicit_update_node()
-            s.implicit_copy_to_prev()
+        while p_max_norm/s.dt>tol and i < max_iter_num:
+            i+=1
 
             with ti.Tape(s.energy):
                 s.implicit_energy_integrate()
+            s.implicit_cal_p()
+
             s.save_previous_energy()
-            max_p=s.implicit_get_max_grad(0.0)
-            if max_p<tol:break
-        print(max_p)
-        s.implicit_update_node()
-        print(iter)
+
+            # alpha=CCD()
+            alpha=0.01
+            delta=1
+
+            while delta >= 0:
+
+                s.implicit_try_update_node(alpha)
+                s.implicit_energy_integrate()
+                delta=s.get_delta()
+                alpha *= 0.5
+
+            # print(alpha)
+            # s.implicit_update_node()
+            s.implicit_x_to_x_prev()
+
+            s.implicit_energy_integrate()
+            s.save_previous_energy()
+            p_max_norm=s.implicit_cal_p_max_norm()
+        print(p_max_norm)
+        s.implicit_x_to_prev_t_x()
         render(gui, s)
 
 
