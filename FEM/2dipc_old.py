@@ -85,7 +85,6 @@ class System:
         self.element_mass = ti.var(dt=ti.f32, shape=self.en)
         self.element_volume = ti.var(dt=ti.f32, shape=self.en)
         self.energy = ti.var(dt=ti.f32, shape=(), needs_grad=True)
-        self.prev_energy = ti.var(dt=ti.f32, shape=())
         self.B = ti.Matrix(self.dim, self.dim, dt=ti.f32, shape=self.en)
         self.neighbor_element_count = ti.var(dt=ti.i32, shape=self.vn)
         #
@@ -109,9 +108,9 @@ class System:
                 node: ti.ext_arr(),
                 element: ti.ext_arr()
                 ):
-        # print("Add obj before vn:", vn)
-        # print("Add obj before v:", self.vn_object_index[self.count])
-        # print("Add obj before e:", self.en_object_index[self.count])
+        print("Add obj before vn:", vn)
+        print("Add obj before v:", self.vn_object_index[self.count])
+        print("Add obj before e:", self.en_object_index[self.count])
 
         for i in range(vn):
             self.node[self.vn_object_index[self.count] + i] = [node[i, 0], node[i, 1]]
@@ -145,9 +144,9 @@ class System:
 
         for i in range(self.vn_object_index[max(self.count - 1, 0)], self.vn_object_index[self.count]):
             self.node_mass[i] /= max(self.neighbor_element_count[i], 1)
-        # print("Add obj after v:", self.vn_object_index[self.count])
-        # print("Add obj after e:", self.en_object_index[self.count])
-        # print("Add obj after mass:", self.node_mass[0])
+        print("Add obj after v:", self.vn_object_index[self.count])
+        print("Add obj after e:", self.en_object_index[self.count])
+        print("Add obj after mass:", self.node_mass[0])
 
     @ti.func
     def D(self, idx):
@@ -244,7 +243,7 @@ class System:
         else:
             t+=1 * ((self.node[i].y-1)**2)*ti.log(ti.abs(self.node[i]).y/1)
         t=1*t
-        # print("U5 i",t)
+        print("U5 i",t)
         return  t
 
     @ti.kernel
@@ -257,46 +256,25 @@ class System:
 
     @ti.kernel
     def implicit_prepare_node(self):
-        # print("f", 10 * self.dt * self.dt / self.node_mass[0])
+        print("f", 10 * self.dt * self.dt / self.node_mass[0])
         for i in range(self.vn_object_index[self.count]):
             self.bar_node[i] = 2 * self.node[i] - self.prev_node[i] + [0, -10 * self.dt * self.dt / self.node_mass[i]]
-            self.prev_node[i] = self.node[i]
-    @ti.kernel
-    def implicit_copy_to_prev(self):
-        for i in range(self.vn_object_index[self.count]):
             self.prev_node[i] = self.node[i]
 
     @ti.kernel
     def implicit_get_grad(self):
         for i in range(self.vn_object_index[self.count]):
             self.p[i] = self.node.grad[i]
-    @ti.kernel
-    def implicit_get_max_grad(self,m:ti.f32)->ti.f32:
-        m=0.0
-        for i in range(self.vn_object_index[self.count]):
-            m =max(self.p[i][0],m) 
-            m =max(self.p[i][1],m) 
-        return m
-    
+
     @ti.kernel
     def implicit_update_node(self):
-        # print("E:", self.energy[None])
+        print("E:", self.energy[None])
         for i in range(self.vn_object_index[self.count]):
-            self.node[i] = self.prev_node[i]
+            self.node[i] += -self.p[i] * 0.01
 
-        # print("p:", self.p[0])
-        # print("bar:", self.bar_node[0], )
-        # print("node:", self.node[0], )
-    @ti.kernel
-    def implicit_try_update_node(self,alpha:ti.f32):
-        # print("E:", self.energy[None])
-        for i in range(self.vn_object_index[self.count]):
-            self.node[i] = self.prev_node[i] -self.p[i] * alpha
-
-        # print("p:", self.p[0])
-        # print("bar:", self.bar_node[0], )
-        # print("node:", self.node[0], )
-
+        print("p:", self.p[0])
+        print("bar:", self.bar_node[0], )
+        print("node:", self.node[0], )
 
     @ti.kernel
     def implicit_clip(self):
@@ -309,13 +287,7 @@ class System:
                 elif self.node[i][c] > boundary[c][1]:
                     self.node[i][c] = boundary[c][1] - self.epsilon * ti.random()
                     # self.velocity[i][c] *= -1
-    @ti.kernel
-    def save_previous_energy(self):
-        self.prev_energy[None]=self.energy[None]
-    @ti.kernel
-    def get_delta(self)->ti.f32:
-        return self.energy[None]-self.prev_energy[None]
-        
+
 
 def render(gui, system):
     canvas = gui.canvas
@@ -367,55 +339,15 @@ def inplicit():
                 tmp_obj = NewObject("obj")
                 s.add_obj(tmp_obj.vn, tmp_obj.en, tmp_obj.node, tmp_obj.element)
                 tprint(s)
-                
-        # max_iter_num=500
-        # self.implicit_prepare_node()
-        # old_energy=0.0
-        # iter_i = 0
-        # while iter_i < max_iter_num:
-        #     self.implicit_clip()
-        #     alpha=0.1
-        #     while alpha>0.00001:
-        #         with ti.Tape(self.energy):
-        #             self.implicit_energy_integrate()
-        #         self.implicit_get_grad()
-        #         self.implicit_update_node(alpha)
-        #         if self.energy[None] - old_energy<0:
-        #             break
-        max_iter_num=100
-        tol=1e-3
+
         s.implicit_prepare_node()
-
-        with ti.Tape(s.energy):
-            s.implicit_energy_integrate()
-        s.save_previous_energy()
-        # s.implicit_get_grad()
-        
-        for iter in range(max_iter_num):
-            # alpha=CCD()
-            alpha=0.5
-            delta=1
-
-            while delta >= 0:
-                alpha*=0.5
-                s.implicit_clip()
-                with ti.Tape(s.energy):
-                    s.implicit_energy_integrate()
-                delta=s.get_delta()
-                s.implicit_get_grad()
-                s.implicit_try_update_node(alpha)
-            # print(alpha)
-            # s.implicit_update_node()
-            s.implicit_copy_to_prev()
-
+        for iter in range(50):
+            s.implicit_clip()
             with ti.Tape(s.energy):
                 s.implicit_energy_integrate()
-            s.save_previous_energy()
-            max_p=s.implicit_get_max_grad(0.0)
-            if max_p<tol:break
-        print(max_p)
-        s.implicit_update_node()
-        print(iter)
+            s.implicit_get_grad()
+            s.implicit_update_node()
+
         render(gui, s)
 
 
