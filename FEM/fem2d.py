@@ -3,8 +3,8 @@ import math
 import numpy as np
 import taichi as ti
 
-ti.init(arch=ti.cpu, kernel_profiler=True)
-# ti.init(arch=ti.cpu)
+# ti.init(arch=ti.cpu, kernel_profiler=True)
+ti.init(arch=ti.cpu)
 
 bg_color = 0x112f41
 line_color = 0xffb169
@@ -563,4 +563,4 @@ def implicit():
 
 if __name__ == '__main__':
     implicit()
-    ti.kernel_profiler_print()
+    # ti.kernel_profiler_print()
