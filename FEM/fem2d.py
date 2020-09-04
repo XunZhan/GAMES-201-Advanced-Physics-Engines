@@ -3,7 +3,8 @@ import math
 import numpy as np
 import taichi as ti
 
-ti.init(arch=ti.cpu)
+ti.init(arch=ti.cpu, kernel_profiler=True)
+# ti.init(arch=ti.cpu)
 
 bg_color = 0x112f41
 line_color = 0xffb169
@@ -70,6 +71,10 @@ class System:
         self.en_object_index = ti.var(dt=ti.i32, shape=self.on)
         self.count = ti.var(dt=ti.i32, shape=())
 
+        #  the inverse obj id of each node and ele
+        self.node_obj_idx = ti.var(dt=ti.i32, shape=self.vn)
+        self.element_obj_idx = ti.var(dt=ti.i32, shape=self.en)
+
         ## for simulation
         self.E = 4000  # Young modulus
         self.nu = 0.3  # Poisson's ratio: nu \in [0, 0.5)
@@ -109,6 +114,7 @@ class System:
             self.prev_node[self.vn_object_index[self.count] + i] = [node[i, 0], node[i, 1]]
             self.prev_t_node[self.vn_object_index[self.count] + i] = [node[i, 0], node[i, 1]]
             self.bar_node[self.vn_object_index[self.count] + i] = [node[i, 0], node[i, 1]]
+            self.node_obj_idx[self.vn_object_index[self.count] + i] = self.count + 1
 
         for i in range(en):
             # Mapping single object element id to system-wide
@@ -116,6 +122,7 @@ class System:
                 [self.vn_object_index[self.count] + element[i, 0],
                  self.vn_object_index[self.count] + element[i, 1],
                  self.vn_object_index[self.count] + element[i, 2]]
+            self.element_obj_idx[self.en_object_index[self.count] + i] = self.count + 1
 
         # update vn_object_index and en_object_index
         self.vn_object_index[self.count + 1] = self.vn_object_index[self.count] + vn
@@ -199,11 +206,11 @@ class System:
         return self.element_mass[i] * 10 * (self.node[a].y + self.node[b].y + self.node[c].y)
 
     @ti.func
-    def U4(self, i):
+    def U2(self, i):
         return 0.5 * ((self.bar_node[i] - self.node[i]).norm_sqr())
 
     @ti.func
-    def U5(self, i):
+    def U3(self, i):
         # bounding contact potential
         t = 0.0
         dist_x_l = self.node[i].x - boundary[0][0]
@@ -233,42 +240,8 @@ class System:
         #     # print("T:", t)
         return t
 
-    # @ti.func
-    # def b_C2(self, d):
-    #     ans = 0.0
-    #     if d < self.bar_d:
-    #         ans = -1 * (d - self.bar_d) * (d - self.bar_d) * ti.log(d / self.bar_d)
-    #     return ans
-
-    # @ti.func
-    # def pt_line_min_dist(self, pt_idx, start_idx, end_idx):
-    #     start = self.node[start_idx]
-    #     end = self.node[end_idx]
-    #     point = self.node[pt_idx]
-    #
-    #     ac = self.node[pt_idx] - self.node[start_idx]
-    #     ab = self.node[end_idx] - self.node[start_idx]
-    #     tmp = ac.cross(ab) / ab.norm()
-    #     return 0.0
-
-    # ap = point - start
-    # ab = end - start
-    # len = (end - start).norm()
-    # ac_len = ap.dot(ab) / len
-    #
-    # ans = 0.0
-    # if ac_len <= 0:
-    #     ans = ap.norm()
-    #
-    # elif ac_len >= 1:
-    #     ans = (point - end).norm()
-    #
-    # else:
-    #     c = start + ab.normalized() * ac_len
-    #     ans = (point - c).norm()
-
     @ti.func
-    def barrier_energy(self, i, j, p, q):
+    def barrier_energy(self, p, q):
         # tmp = 0.0
         rt = 0.0
         d1, d2, d3 = 0.0, 0.0, 0.0
@@ -354,9 +327,9 @@ class System:
             self.energy[None] += self.U1(i) * self.dt * self.dt
 
         for i in range(self.vn_object_index[self.count]):
-            self.energy[None] += self.U4(i)
-            self.energy[None] += self.U5(i)
-        # print(self.self.U1(20))
+            self.energy[None] += self.U2(i)
+            self.energy[None] += self.U3(i)
+
         # i, j: object
         # p: node, q:face
         for i in range(1, self.count + 1):
@@ -367,7 +340,7 @@ class System:
                         # if i!=j:
 
                         # print("i,j,p,q,t", i, j, p, q, t)
-                        self.energy[None] += self.barrier_energy(i, j, p, q)
+                        self.energy[None] += self.barrier_energy(p, q)
         for i in range(1, self.count + 1):
             for j in range(i + 1, self.count + 1):
                 for p in range(self.vn_object_index[j - 1], self.vn_object_index[j]):
@@ -376,7 +349,7 @@ class System:
                         # if i!=j:
 
                         # print("i,j,p,q,t", i, j, p, q, t)
-                        self.energy[None] += self.barrier_energy(i, j, p, q)
+                        self.energy[None] += self.barrier_energy(p, q)
 
         # for i in range(1, self.count+1):
         #     for j in range(i+1, self.count+1):
@@ -386,35 +359,23 @@ class System:
         #                 self.energy[None] += self.barrier_energy(i, j, p, q)
 
     @ti.func
-    def implicit_prob_node_in_element(self, obj_i, obj_j, i, j):
+    def implicit_prob_node_in_element(self, i, j):
         # 这样的假设是有问题的,假设相对距离随时间单调
         # node i, element j
         rt = 0
-        if obj_i != obj_j:
-            a, b, c = self.node[self.element[j][0]], self.node[self.element[j][1]], self.node[self.element[j][2]]
-            p = self.node[i]
-            Sabc = abs((b - a).cross(c - a))
-            Spbc = abs((b - p).cross(c - p))
-            Sapc = abs((p - a).cross(c - a))
-            Sabp = abs((b - a).cross(p - a))
-            # print("ti.abs(Sabc-Spbc-Sapc-Sabp)",ti.abs(Sabc-Spbc-Sapc-Sabp))
+        a, b, c = self.node[self.element[j][0]], self.node[self.element[j][1]], self.node[self.element[j][2]]
+        p = self.node[i]
+        Sabc = abs((b - a).cross(c - a))
+        Spbc = abs((b - p).cross(c - p))
+        Sapc = abs((p - a).cross(c - a))
+        Sabp = abs((b - a).cross(p - a))
+        # print("ti.abs(Sabc-Spbc-Sapc-Sabp)",ti.abs(Sabc-Spbc-Sapc-Sabp))
 
-            if ti.abs(Sabc - Spbc - Sapc - Sabp) > self.epsilon:
-                rt = 0
-            else:
-                rt = 1
+        if ti.abs(Sabc - Spbc - Sapc - Sabp) > self.epsilon:
+            rt = 0
+        else:
+            rt = 1
         return rt
-
-    # @ti.func
-    # def implicit_prob_node_in_line_left(self,i,j,k):
-    #     # 这样的假设是有问题的,假设相对距离随时间单调
-    #     # node i, line node j,k
-    #     p=self.node[i]
-    #     a,b=self.node[j],self.node[k]
-    #     if ti.cross(b-a,p-a)>0: # 有可能有问题,因为在线上也算在右边
-    #         return 1
-    #     else:
-    #         return 0
 
     @ti.kernel
     def implicit_prob_all(self) -> ti.i32:
@@ -426,7 +387,9 @@ class System:
             for j in range(1, self.count + 1):
                 for p in range(self.vn_object_index[i - 1], self.vn_object_index[i]):
                     for q in range(self.en_object_index[j - 1], self.en_object_index[j]):
-                        flag += self.implicit_prob_node_in_element(i, j, p, q)
+                        if i != j:
+                            flag += self.implicit_prob_node_in_element(p, q)
+
         # boundary
         for t in range(self.vn_object_index[self.count]):
             if self.node[t][0] <= boundary[0][0] + self.epsilon:
@@ -437,6 +400,7 @@ class System:
                 flag += 1
             if self.node[t][1] > boundary[1][1] - self.epsilon:
                 flag += 1
+
         return flag
 
     def ccd(self, l=0, r=1, max_iter=10):
@@ -454,12 +418,12 @@ class System:
                 l = mid
             else:
                 r = mid
-        if l < self.epsilon:
-            print("warning: small alpha")
-        self.update_node(l)
-        if self.implicit_prob_all() > 0.0:
-            print("error: l prob", l)
-            exit(-1)
+        # if l < self.epsilon:
+        #     print("warning: small alpha")
+        # self.update_node(l)
+        # if self.implicit_prob_all() > 0.0:
+        #     print("error: l prob", l)
+        #     exit(-1)
         return l
 
     @ti.kernel
@@ -510,7 +474,7 @@ class System:
             self.node[i] = self.prev_node[i] - self.p[i] * alpha
 
     @ti.kernel
-    def check_node(self, alpha: ti.f32):
+    def check_node(self):
         for i in range(self.vn_object_index[self.count]):
             if self.node[i].y < self.epsilon:
                 print("small y")
@@ -523,11 +487,6 @@ def render(gui, system):
 
     gui.lines(system.begin_point.to_numpy(), system.end_point.to_numpy(), color=line_color, radius=1.5)
     gui.show()
-
-
-@ti.kernel
-def tprint(t: ti.template()):
-    print(t.node[0])
 
 
 def implicit():
@@ -567,8 +526,9 @@ def implicit():
             s.reset_energy()
             with ti.Tape(s.energy):
                 s.update_barrier_energy()
-            s.calc_p()
             s.save_energy()
+
+            s.calc_p()
             alpha = s.ccd(r=1)
             # alpha = 0.01
             if alpha < 0.01:
@@ -584,7 +544,7 @@ def implicit():
                 if np.isnan(s.energy[None]):
                     exit(-1)
 
-                if s.energy[None] - s.prev_energy[None] < s.epsilon or alpha < s.epsilon:
+                if s.energy[None] - s.prev_energy[None] < 0 or alpha < s.epsilon:
                     break
 
             s.x_to_prev_x()
@@ -593,7 +553,7 @@ def implicit():
             s.save_energy()
 
             p_inf_norm = s.calc_p_inf_norm()
-            print("p_inf_norm", p_inf_norm)
+            # print("p_inf_norm", p_inf_norm)
             if p_inf_norm / s.dt <= tol or cur_iter > max_iter:
                 break
         s.x_to_prev_t_x()
@@ -603,3 +563,4 @@ def implicit():
 
 if __name__ == '__main__':
     implicit()
+    ti.kernel_profiler_print()
